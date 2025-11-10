@@ -1,0 +1,7 @@
+Name: Seemakurthi Nandan Sri Siva Ramakrishna
+Email: seemakurthi_nssr@cs.iitr.ac.in
+
+OS: Windows 11 Home Single Language
+CPU: 12th Gen Intel(R) Core(TM) i5-12500H (2.50 GHz)
+RAM: 16.0 GB
+Language & version: Python 3.11.9

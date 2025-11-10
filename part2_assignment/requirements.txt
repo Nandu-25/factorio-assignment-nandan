@@ -1,0 +1,5 @@
+# No external dependencies required for the solvers themselves!
+# Both factory/main.py and belts/main.py use only Python standard library.
+
+# Testing dependencies (optional, only for running pytest)
+pytest>=7.0.0
