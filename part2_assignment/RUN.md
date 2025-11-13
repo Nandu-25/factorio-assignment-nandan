@@ -6,8 +6,6 @@
 - **Dependencies**: No external libraries required  
 - **Operating System**: Windows  
 
-> ✅ This submission was done using the free demo version.
-
 ---
 
 ## 🔧 Initial Setup
@@ -47,4 +45,5 @@ python -m pytest tests/test_factory.py -v
 Run Only Belts Tests
 ```bash
 python -m pytest tests/test_belts.py -v
+
 ```
