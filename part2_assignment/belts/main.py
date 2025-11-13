@@ -271,6 +271,11 @@ def solve_belts(data:dict)->dict:
         }
 
     # Clean up auxiliary structure
+    for u in range(len(din.adj)):
+        for e in din.adj[u]:
+            if e.to == SS or e.to == TT:
+                e.cap = 0.0
+                e.flow = 0.0
     din.adj[SS] = []; din.adj[TT] = []
 
     # Remove temporary circulation edges
@@ -334,3 +339,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
