@@ -7,7 +7,6 @@ This document outlines the design and implementation of two standalone command-l
 Both tools function as standard UNIX-style filters. They read a single JSON object from stdin, perform a calculation, and write a single JSON object to stdout. All logging or auxiliary output is suppressed to ensure a clean data pipeline.
 
 ```bash
-# Example usage
 python factory/main.py < input_factory.json > output_factory.json
 python belts/main.py < input_belts.json > output_belts.json
 ```
@@ -95,14 +94,14 @@ This tool solves a maximum flow problem in a network with edge bounds (lower and
 
 The tool expects a JSON object describing the graph, supplies, and constraints.
 
-```json
+```json5
 {
-  "edges": [{"from": "u", "to": "v", "lo": 0, "hi": 100}, ...],
+  "edges": [{"from": "u", "to": "v", "lo": 0, "hi": 100},],
   "sources": {"s1": 900, "s2": 600},
   "sink": "sink",
   "nodes": { "a": {"cap": 500} },
-  // "nodes" can also be: { "a": {"cap_in":500, "cap_out":700} }
-  // or "node_caps" (legacy): { "a": 500 }
+  //can also use "nodes": { "a": {"cap_in":500, "cap_out":700} }
+  //can also use or "node_caps": { "a": 500 }
 }
 ```
 
@@ -127,6 +126,6 @@ The problem is solved using a multi-stage max-flow approach.
 
 ### 3. Algorithm Implementation
 
-The solver uses a deterministic Dinic's algorithm for max-flow.
+The solver uses a deterministic Dinic's algorithm(https://cp-algorithms.com/graph/dinic.html) for max-flow.
 
 - Numeric precision tolerance is set to 1e-9.
