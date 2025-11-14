@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Belt system flow optimization solver using max-flow algorithms.
 This module implements a solution for conveyor belt network flow problems
@@ -9,334 +8,370 @@ import json
 from typing import List, Tuple
 
 # Floating-point comparison tolerance for numerical stability
-TOLERANCE = 1e-9
+EPSILON = 1e-9
 
-class Edge:
+class FlowEdge:
     """
     Represents a directed edge in the flow network.
     Uses __slots__ for memory efficiency in large graphs.
     """
-    __slots__ = ("to","rev","cap","flow","orig_from","orig_to","is_original","lo","hi","name")
+    __slots__ = ("dest","back_idx","capacity","current_flow","source_node","target_node","is_core_edge","lower_bound","upper_bound","label")
     
-    def __init__(self, to, rev, cap):
+    def __init__(self, dest, back_idx, capacity):
         """
         Initialize a flow network edge.
         
         Args:
-            to: Destination node index
-            rev: Index of reverse edge in adjacency list
-            cap: Current available capacity for flow
+            dest: Destination node index
+            back_idx: Index of reverse edge in adjacency list
+            capacity: Current available capacity for flow
         """
-        self.to = to
-        self.rev = rev
-        self.cap = cap
-        self.flow = 0.0
-        self.orig_from = None
-        self.orig_to = None
-        self.is_original = False
-        self.lo = 0.0
-        self.hi = 0.0
-        self.name = None
+        self.dest = dest
+        self.back_idx = back_idx
+        self.capacity = capacity
+        self.current_flow = 0.0
+        self.source_node = None
+        self.target_node = None
+        self.is_core_edge = False
+        self.lower_bound = 0.0
+        self.upper_bound = 0.0
+        self.label = None
 
-class Dinic:
+class MaxFlowSolver:
     """
     Dinic's algorithm implementation for computing maximum flow.
     Uses level graph and blocking flow concepts for O(V^2 * E) complexity.
     """
-    def __init__(self, n:int):
-        """Initialize flow network with n nodes."""
-        self.n = n
-        self.adj: List[List[Edge]] = [[] for _ in range(n)]
+    def __init__(self, node_count:int):
+        """Initialize flow network with node_count nodes."""
+        self.node_count = node_count
+        self.graph: List[List[FlowEdge]] = [[] for _ in range(node_count)]
     
-    def add_edge(self, u:int, v:int, cap:float)->Tuple[Edge,Edge]:
+    def add_directed_edge(self, src:int, dst:int, cap:float)->Tuple[FlowEdge,FlowEdge]:
         """
         Add a directed edge with residual capacity tracking.
         
         Args:
-            u: Source node
-            v: Destination node  
+            src: Source node
+            dst: Destination node  
             cap: Edge capacity
             
         Returns:
             Tuple of (forward_edge, backward_edge)
         """
-        fwd = Edge(v, len(self.adj[v]), cap)
-        bwd = Edge(u, len(self.adj[u]), 0.0)
-        self.adj[u].append(fwd)
-        self.adj[v].append(bwd)
-        return fwd, bwd
+        forward = FlowEdge(dst, len(self.graph[dst]), cap)
+        backward = FlowEdge(src, len(self.graph[src]), 0.0)
+        self.graph[src].append(forward)
+        self.graph[dst].append(backward)
+        return forward, backward
     
-    def bfs(self, s:int, t:int)->List[int]:
+    def build_level_graph(self, source:int, sink:int)->List[int]:
         """
         Build level graph using breadth-first search.
         
         Args:
-            s: Source node
-            t: Sink node
+            source: Source node
+            sink: Sink node
             
         Returns:
             Distance levels from source (-1 if unreachable)
         """
         from collections import deque
-        level = [-1]*self.n
-        q = deque([s]); level[s] = 0
-        while q:
-            u = q.popleft()
-            for e in self.adj[u]:
-                if level[e.to] < 0 and e.cap > TOLERANCE:
-                    level[e.to] = level[u] + 1
-                    q.append(e.to)
-        return level
+        distances = [-1]*self.node_count
+        queue = deque([source]); distances[source] = 0
+        while queue:
+            current = queue.popleft()
+            for edge in self.graph[current]:
+                if distances[edge.dest] < 0 and edge.capacity > EPSILON:
+                    distances[edge.dest] = distances[current] + 1
+                    queue.append(edge.dest)
+        return distances
     
-    def dfs(self, u:int, t:int, f:float, level:List[int], it:List[int])->float:
+    def push_flow(self, current:int, sink:int, available:float, distances:List[int], edge_pointers:List[int])->float:
         """
         Find blocking flow using depth-first search with iterators.
         
         Args:
-            u: Current node
-            t: Target sink node
-            f: Available flow to push
-            level: Pre-computed level graph
-            it: Iterator positions for each node
+            current: Current node
+            sink: Target sink node
+            available: Available flow to push
+            distances: Pre-computed level graph
+            edge_pointers: Iterator positions for each node
             
         Returns:
             Amount of flow successfully pushed
         """
-        if u == t: return f
-        i = it[u]
-        while i < len(self.adj[u]):
-            e = self.adj[u][i]
-            if e.cap > TOLERANCE and level[u] < level[e.to]:
-                pushed_flow = self.dfs(e.to, t, min(f, e.cap), level, it)
-                if pushed_flow > TOLERANCE:
-                    e.cap -= pushed_flow
-                    self.adj[e.to][e.rev].cap += pushed_flow
-                    e.flow += pushed_flow
-                    self.adj[e.to][e.rev].flow -= pushed_flow
-                    return pushed_flow
-            i += 1; it[u] = i
+        if current == sink: return available
+        pointer = edge_pointers[current]
+        while pointer < len(self.graph[current]):
+            edge = self.graph[current][pointer]
+            if edge.capacity > EPSILON and distances[current] < distances[edge.dest]:
+                flow_pushed = self.push_flow(edge.dest, sink, min(available, edge.capacity), distances, edge_pointers)
+                if flow_pushed > EPSILON:
+                    edge.capacity -= flow_pushed
+                    self.graph[edge.dest][edge.back_idx].capacity += flow_pushed
+                    edge.current_flow += flow_pushed
+                    self.graph[edge.dest][edge.back_idx].current_flow -= flow_pushed
+                    return flow_pushed
+            pointer += 1; edge_pointers[current] = pointer
         return 0.0
     
-    def maxflow(self, s:int, t:int)->float:
+    def compute_max_flow(self, source:int, sink:int)->float:
         """
         Compute maximum flow from source to sink.
         
         Args:
-            s: Source node
-            t: Sink node
+            source: Source node
+            sink: Sink node
             
         Returns:
             Maximum achievable flow value
         """
-        total_flow = 0.0
-        INFINITY = 1e100
+        total = 0.0
+        LARGE_VALUE = 1e100
         while True:
-            level = self.bfs(s, t)
-            if level[t] < 0: return total_flow
-            it = [0]*self.n
+            distances = self.build_level_graph(source, sink)
+            if distances[sink] < 0: return total
+            edge_pointers = [0]*self.node_count
             while True:
-                augment = self.dfs(s, t, INFINITY, level, it)
-                if augment <= TOLERANCE: break
-                total_flow += augment
+                augmentation = self.push_flow(source, sink, LARGE_VALUE, distances, edge_pointers)
+                if augmentation <= EPSILON: break
+                total += augmentation
 
-def solve_belts(data:dict)->dict:
+def solve_belts(input_data:dict)->dict:
     """
     Solve the belt network flow problem with lower/upper bounds on edges.
     
     Args:
-        data: Input dictionary containing edges, sources, sink, and node capacities
+        input_data: Input dictionary containing edges, sources, sink, and node capacities
         
     Returns:
         Dictionary with solution status, flow values, or infeasibility diagnosis
     """
-    edges_in = data["edges"]
-    sources = data.get("sources", {})
-    sink = data["sink"]
+    edge_list = input_data["edges"]
+    source_nodes = input_data.get("sources", {})
+    sink_node = input_data["sink"]
 
     # Parse node capacity constraints from multiple possible input formats
-    node_caps_map = {}
-    if "node_caps" in data:
-        for k, v in data["node_caps"].items():
-            node_caps_map[k] = float(v)
-    if "nodes" in data:
-        for k, v in data["nodes"].items():
-            cap = None
-            if isinstance(v, dict):
-                cin = v.get("cap_in", None)
-                cout = v.get("cap_out", None)
+    capacity_map = {}
+    if "node_caps" in input_data:
+        for node_name, cap_value in input_data["node_caps"].items():
+            capacity_map[node_name] = float(cap_value)
+    if "nodes" in input_data:
+        for node_name, node_spec in input_data["nodes"].items():
+            final_cap = None
+            if isinstance(node_spec, dict):
+                cap_in = node_spec.get("cap_in", None)
+                cap_out = node_spec.get("cap_out", None)
                 # Use the minimum of input and output capacities
-                if cin is not None or cout is not None:
-                    if cin is None: cin = float('inf')
-                    if cout is None: cout = float('inf')
-                    cap = float(min(cin, cout))
-                if "cap" in v:
-                    cap = float(v["cap"])
+                if cap_in is not None or cap_out is not None:
+                    if cap_in is None: cap_in = float('inf')
+                    if cap_out is None: cap_out = float('inf')
+                    final_cap = float(min(cap_in, cap_out))
+                if "cap" in node_spec:
+                    final_cap = float(node_spec["cap"])
             # Keep the most restrictive capacity
-            if cap is not None and (k not in node_caps_map or cap < node_caps_map[k]):
-                node_caps_map[k] = cap
+            if final_cap is not None and (node_name not in capacity_map or final_cap < capacity_map[node_name]):
+                capacity_map[node_name] = final_cap
 
     # Collect all nodes referenced in the network
-    nodes = set()
-    for e in edges_in:
-        nodes.add(e["from"]); nodes.add(e["to"])
-    for s in sources.keys():
-        nodes.add(s)
-    nodes.add(sink)
+    all_nodes = set()
+    for edge_spec in edge_list:
+        all_nodes.add(edge_spec["from"]); all_nodes.add(edge_spec["to"])
+    for src_name in source_nodes.keys():
+        all_nodes.add(src_name)
+    all_nodes.add(sink_node)
 
     # Nodes requiring capacity splitting (excluding sources and sink)
-    split_nodes = {v for v in node_caps_map.keys() if v not in sources and v != sink}
+    nodes_to_split = {node for node in capacity_map.keys() if node not in source_nodes and node != sink_node}
 
     # Build node index mapping
-    name_list = []
-    idx = {}
-    def add_node(name):
+    node_names = []
+    node_indices = {}
+    def register_node(name):
         """Register a node in the index if not already present."""
-        if name not in idx:
-            idx[name] = len(name_list)
-            name_list.append(name)
+        if name not in node_indices:
+            node_indices[name] = len(node_names)
+            node_names.append(name)
 
     # Create virtual in/out nodes for capacity-constrained nodes
-    for v in sorted(nodes):
-        if v in split_nodes:
-            add_node(v+"_in"); add_node(v+"_out")
+    for node in sorted(all_nodes):
+        if node in nodes_to_split:
+            register_node(node+"_in"); register_node(node+"_out")
         else:
-            add_node(v)
+            register_node(node)
 
-    din = Dinic(len(name_list))
+    solver = MaxFlowSolver(len(node_names))
 
-    def map_from(u):
+    def get_outgoing_node(node):
         """Map logical node to its outgoing connection point."""
-        return idx[u+"_out"] if u in split_nodes else idx[u]
-    def map_to(v):
+        return node_indices[node+"_out"] if node in nodes_to_split else node_indices[node]
+    def get_incoming_node(node):
         """Map logical node to its incoming connection point."""
-        return idx[v+"_in"] if v in split_nodes else idx[v]
+        return node_indices[node+"_in"] if node in nodes_to_split else node_indices[node]
 
     # Add internal capacity edges for split nodes
-    for v in sorted(split_nodes):
-        cap = float(node_caps_map[v])
-        u = idx[v+"_in"]; w = idx[v+"_out"]
-        fwd, bwd = din.add_edge(u, w, cap)
-        fwd.name = f"{v}__internal"
+    for node in sorted(nodes_to_split):
+        node_cap = float(capacity_map[node])
+        in_idx = node_indices[node+"_in"]; out_idx = node_indices[node+"_out"]
+        forward, backward = solver.add_directed_edge(in_idx, out_idx, node_cap)
+        forward.label = f"{node}__internal"
 
     # Add original network edges with lower/upper bound transformation
-    orig_edge_refs = []
-    for e in sorted(edges_in, key=lambda x: (x["from"], x["to"])):
-        u = map_from(e["from"]); v = map_to(e["to"])
-        lo = float(e.get("lo", 0.0)); hi = float(e.get("hi", 0.0))
+    core_edge_list = []
+    for edge_spec in sorted(edge_list, key=lambda x: (x["from"], x["to"])):
+        src_idx = get_outgoing_node(edge_spec["from"]); dst_idx = get_incoming_node(edge_spec["to"])
+        lo_bound = float(edge_spec.get("lo", 0.0)); hi_bound = float(edge_spec.get("hi", 0.0))
         # Check for infeasible bounds
-        if hi < lo - 1e-12:
-            return {"status":"infeasible","cut_reachable":[],"deficit":{"demand_balance":float(sum(sources.values())),"tight_nodes":[],"tight_edges":[]}}
-        fwd, bwd = din.add_edge(u, v, hi - lo)
-        fwd.is_original = True; fwd.orig_from = e["from"]; fwd.orig_to = e["to"]
-        fwd.lo = lo; fwd.hi = hi; fwd.name = f"{e['from']}->{e['to']}"
-        orig_edge_refs.append(fwd)
+        if hi_bound < lo_bound - 1e-12:
+            return {"status":"infeasible","cut_reachable":[],"deficit":{"demand_balance":float(sum(source_nodes.values())),"tight_nodes":[],"tight_edges":[]}}
+        forward, backward = solver.add_directed_edge(src_idx, dst_idx, hi_bound - lo_bound)
+        forward.is_core_edge = True; forward.source_node = edge_spec["from"]; forward.target_node = edge_spec["to"]
+        forward.lower_bound = lo_bound; forward.upper_bound = hi_bound; forward.label = f"{edge_spec['from']}->{edge_spec['to']}"
+        core_edge_list.append(forward)
 
     # Calculate flow imbalance due to lower bounds
-    imbalance = {name: 0.0 for name in name_list}
-    for fwd in orig_edge_refs:
-        if fwd.lo > 0:
-            imbalance[name_list[map_to(fwd.orig_to)]] += fwd.lo
-            imbalance[name_list[map_from(fwd.orig_from)]] -= fwd.lo
+    node_balance = {name: 0.0 for name in node_names}
+    for forward in core_edge_list:
+        if forward.lower_bound > 0:
+            node_balance[node_names[get_incoming_node(forward.target_node)]] += forward.lower_bound
+            node_balance[node_names[get_outgoing_node(forward.source_node)]] -= forward.lower_bound
 
     # Create temporary circulation edges from sink to sources
-    extra_pairs = []
-    sink_from = map_from(sink)
-    for sname, supply in sorted(sources.items()):
-        u = sink_from
-        v = map_from(sname)
-        ef, eb = din.add_edge(u, v, float(supply))
-        extra_pairs.append((ef, din.adj[v][ef.rev]))
+    temp_edge_pairs = []
+    sink_outgoing = get_outgoing_node(sink_node)
+    for src_name, supply_value in sorted(source_nodes.items()):
+        src_out = get_outgoing_node(src_name)
+        circ_forward, circ_backward = solver.add_directed_edge(sink_outgoing, src_out, float(supply_value))
+        temp_edge_pairs.append((circ_forward, solver.graph[src_out][circ_forward.back_idx]))
 
     # Add auxiliary nodes for checking lower bound feasibility
-    SS = len(name_list); TT = SS + 1
-    din.adj.append([]); din.adj.append([]); din.n += 2
+    aux_source = len(node_names); aux_sink = aux_source + 1
+    solver.graph.append([]); solver.graph.append([]); solver.node_count += 2
 
-    demand_total = 0.0
-    for vname, val in sorted(imbalance.items()):
-        if val > TOLERANCE:
-            demand_total += val
-            din.add_edge(SS, idx[vname], val)
-        elif val < -TOLERANCE:
-            din.add_edge(idx[vname], TT, -val)
+    total_demand = 0.0
+    for node_name, balance_value in sorted(node_balance.items()):
+        if balance_value > EPSILON:
+            total_demand += balance_value
+            solver.add_directed_edge(aux_source, node_indices[node_name], balance_value)
+        elif balance_value < -EPSILON:
+            solver.add_directed_edge(node_indices[node_name], aux_sink, -balance_value)
 
     # Check if lower bounds are satisfiable
-    flow_feas = din.maxflow(SS, TT)
-    if flow_feas < demand_total - 1e-7:
-        level = din.bfs(SS, TT)
-        reached = [name_list[i] for i, lvl in enumerate(level) if i < len(name_list) and lvl >= 0]
+    feasibility_flow = solver.compute_max_flow(aux_source, aux_sink)
+    if feasibility_flow < total_demand - 1e-7:
+        distances = solver.build_level_graph(aux_source, aux_sink)
+        reachable_indices = [idx for idx, dist in enumerate(distances) if idx < len(node_names) and dist >= 0]
+        reachable_names = [node_names[idx] for idx in reachable_indices]
+        cut_nodes = {n.replace("_in","").replace("_out","") for n in reachable_names}
+        
+        # Identify saturated edges crossing the cut (lower bound infeasibility)
+        saturated_edges_lb = []
+        for node_idx in reachable_indices:
+            for edge in solver.graph[node_idx]:
+                if edge.dest < len(node_names) and distances[edge.dest] < 0:
+                    if edge.is_core_edge and edge.capacity <= 1e-7:
+                        # This edge is saturated in the transformed network
+                        flow_deficit = edge.lower_bound - edge.current_flow
+                        saturated_edges_lb.append({
+                            "from": edge.source_node, 
+                            "to": edge.target_node, 
+                            "flow_needed": float(max(0, flow_deficit))
+                        })
+        
+        # Identify saturated node capacities in the cut
+        saturated_nodes_lb = []
+        for node in sorted(set(capacity_map.keys()) - set(source_nodes.keys()) - {sink_node}):
+            in_idx = node_indices[node+"_in"] if node in nodes_to_split else None
+            if in_idx is not None and distances[in_idx] >= 0:
+                for edge in solver.graph[in_idx]:
+                    if edge.label == f"{node}__internal" and edge.capacity <= 1e-7:
+                        saturated_nodes_lb.append(node)
+        
         return {
             "status":"infeasible",
-            "cut_reachable": sorted({n.replace("_in","").replace("_out","") for n in reached}),
-            "deficit":{"demand_balance":float(demand_total - flow_feas),"tight_nodes":[],"tight_edges":[]}
+            "cut_reachable": sorted(cut_nodes),
+            "deficit":{
+                "demand_balance":float(total_demand - feasibility_flow),
+                "tight_nodes":sorted(saturated_nodes_lb),
+                "tight_edges":saturated_edges_lb
+            }
         }
 
     # Clean up auxiliary structure
-    for u in range(len(din.adj)):
-        for e in din.adj[u]:
-            if e.to == SS or e.to == TT:
-                e.cap = 0.0
-                e.flow = 0.0
-    din.adj[SS] = []; din.adj[TT] = []
+    for node_idx in range(len(solver.graph)):
+        for edge in solver.graph[node_idx]:
+            if edge.dest == aux_source or edge.dest == aux_sink:
+                edge.capacity = 0.0
+                edge.current_flow = 0.0
+    solver.graph[aux_source] = []; solver.graph[aux_sink] = []
 
     # Remove temporary circulation edges
-    for ef, eb in extra_pairs:
-        ef.cap = 0.0; ef.flow = 0.0
-        eb.cap = 0.0; eb.flow = 0.0
+    for circ_fwd, circ_bwd in temp_edge_pairs:
+        circ_fwd.capacity = 0.0; circ_fwd.current_flow = 0.0
+        circ_bwd.capacity = 0.0; circ_bwd.current_flow = 0.0
 
     # Solve main max-flow problem from sources to sink
-    S = len(din.adj); din.adj.append([]); din.n += 1
+    super_source = len(solver.graph); solver.graph.append([]); solver.node_count += 1
     total_supply = 0.0
-    for sname, supply in sorted(sources.items()):
-        total_supply += float(supply)
-        din.add_edge(S, map_from(sname), float(supply))
-    T = map_to(sink)
+    for src_name, supply_value in sorted(source_nodes.items()):
+        total_supply += float(supply_value)
+        solver.add_directed_edge(super_source, get_outgoing_node(src_name), float(supply_value))
+    target_sink = get_incoming_node(sink_node)
 
-    delivered = din.maxflow(S, T)
+    flow_delivered = solver.compute_max_flow(super_source, target_sink)
     # Check if all supply can be delivered
-    if delivered < total_supply - 1e-7:
-        level = din.bfs(S, T)
-        reachable_idxs = [i for i, lvl in enumerate(level) if lvl >= 0 and i < len(name_list)]
-        reachable = [name_list[i] for i in reachable_idxs]
-        cut_set = {v.replace("_in","").replace("_out","") for v in reachable}
+    if flow_delivered < total_supply - 1e-7:
+        distances = solver.build_level_graph(super_source, target_sink)
+        reachable_indices = [idx for idx, dist in enumerate(distances) if dist >= 0 and idx < len(node_names)]
+        reachable_names = [node_names[idx] for idx in reachable_indices]
+        cut_nodes = {v.replace("_in","").replace("_out","") for v in reachable_names}
+        
         # Identify edges at full capacity in the min-cut
-        tight_edges = []
-        for u_idx in reachable_idxs:
-            for e in din.adj[u_idx]:
-                if e.to < len(name_list) and level[e.to] < 0:
-                    if e.is_original and e.cap <= 1e-7:
-                        tight_edges.append({"from": e.orig_from, "to": e.orig_to, "flow_needed": 0.0})
+        saturated_edges = []
+        for node_idx in reachable_indices:
+            for edge in solver.graph[node_idx]:
+                if edge.dest < len(node_names) and distances[edge.dest] < 0:
+                    if edge.is_core_edge and edge.capacity <= EPSILON:
+                        # Edge is at upper bound; it's a bottleneck
+                        saturated_edges.append({
+                            "from": edge.source_node, 
+                            "to": edge.target_node, 
+                            "flow_needed": 0.0
+                        })
+        
         # Identify capacity-saturated nodes in the min-cut
-        tight_nodes = []
-        for v in sorted(set(node_caps_map.keys()) - set(sources.keys()) - {sink}):
-            u = idx[v+"_in"] if v in split_nodes else None
-            if u is not None:
-                for e in din.adj[u]:
-                    if e.name == f"{v}__internal" and e.cap <= 1e-7:
-                        tight_nodes.append(v)
+        saturated_nodes = []
+        for node in sorted(set(capacity_map.keys()) - set(source_nodes.keys()) - {sink_node}):
+            in_idx = node_indices.get(node+"_in")
+            if in_idx is not None and in_idx < len(distances) and distances[in_idx] >= 0:
+                for edge in solver.graph[in_idx]:
+                    if edge.label == f"{node}__internal" and edge.capacity <= EPSILON:
+                        saturated_nodes.append(node)
+                        break
         return {
             "status":"infeasible",
-            "cut_reachable": sorted(cut_set),
-            "deficit":{"demand_balance":float(total_supply - delivered),"tight_nodes":sorted(tight_nodes),"tight_edges":tight_edges}
+            "cut_reachable": sorted(cut_nodes),
+            "deficit":{"demand_balance":float(total_supply - flow_delivered),"tight_nodes":sorted(saturated_nodes),"tight_edges":saturated_edges}
         }
 
     # Extract final flow values (add back lower bounds)
-    flows = []
-    for e in orig_edge_refs:
-        f = e.flow + e.lo
+    final_flows = []
+    for edge in core_edge_list:
+        flow_value = edge.current_flow + edge.lower_bound
         # Handle numerical precision issues
-        if f < 0 and f > -1e-7: f = 0.0
-        flows.append({"from": e.orig_from, "to": e.orig_to, "flow": float(f)})
+        if flow_value < 0 and flow_value > -1e-7: flow_value = 0.0
+        final_flows.append({"from": edge.source_node, "to": edge.target_node, "flow": float(flow_value)})
 
-    return {"status":"ok","max_flow_per_min":float(delivered),"flows":flows}
+    return {"status":"ok","max_flow_per_min":float(flow_delivered),"flows":final_flows}
 
 def main():
     """
     Entry point: Read JSON input from stdin, solve the problem, and output JSON result.
     """
-    data = json.load(sys.stdin)
-    out = solve_belts(data)
-    json.dump(out, sys.stdout, separators=(",", ":"), ensure_ascii=False)
+    input_data = json.load(sys.stdin)
+    result = solve_belts(input_data)
+    json.dump(result, sys.stdout, separators=(",", ":"), ensure_ascii=False)
 
 if __name__ == "__main__":
     main()
-
